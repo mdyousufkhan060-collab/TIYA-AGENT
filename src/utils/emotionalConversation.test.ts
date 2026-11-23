@@ -135,3 +135,63 @@ test('detectEmotionalVoiceStyle generates softer, slightly slower affectionate g
   assert.ok(goodbyeStyle.includes('gentle disappointment'));
   assert.ok(goodbyeStyle.includes('never exaggerated crying'));
 });
+
+test('Admin-only human emotional update: anger, sadness, joy, honest absence continuity, voice rules, and strict non-admin isolation', () => {
+  // Anger detection & calm non-defensive guidance
+  assert.equal(classifyUserEmotionalMoment('আজ খুব রাগ হচ্ছে, মেজাজ খারাপ।'), 'anger');
+  assert.equal(classifyUserEmotionalMoment('I am so angry right now'), 'anger');
+  const angerCtx = analyzeConversationEmotionalContext([], 'আজ খুব রাগ হচ্ছে।');
+  assert.equal(angerCtx.latestMoment, 'anger');
+  assert.ok(angerCtx.promptHint.includes('never robotic, defensive, or argumentative'));
+
+  const angerVoiceStyle = detectEmotionalVoiceStyle('আচ্ছা স্যার, বলুন তো কী হয়েছে?', true, 'anger');
+  assert.ok(angerVoiceStyle.includes('non-defensive'));
+  assert.ok(angerVoiceStyle.includes('female voice'));
+
+  // Sadness -> listen before advice, no jokes, no generic motivational speeches, give space
+  const sadCtx = analyzeConversationEmotionalContext([], 'আজ মনটা ভালো নেই, খুব একা লাগছে।');
+  assert.equal(sadCtx.latestMoment, 'frustration_or_sadness');
+  assert.ok(sadCtx.promptHint.includes('listen before offering advice'));
+  assert.ok(sadCtx.promptHint.includes('avoid jokes when serious'));
+  assert.ok(sadCtx.promptHint.includes('avoid generic motivational speeches'));
+
+  // Happiness -> joyful, playful, emotionally connected
+  const happyCtx = analyzeConversationEmotionalContext([], 'দারুণ খবর! আমি প্রজেক্টটা জিতে গেছি!');
+  assert.equal(happyCtx.latestMoment, 'happiness');
+  assert.ok(happyCtx.promptHint.includes('joyful, playful, emotionally connected'));
+
+  // Admin voice prompt includes full emotional range, natural Bengali touches, human flow, honest absence rule & concise voice rules
+  const threeHoursAgo = Date.now() - 3 * 60 * 60 * 1000;
+  const adminVoicePrompt = buildTiyaSystemPrompt(
+    DEFAULT_SETTINGS,
+    [{ id: 'm1', role: 'user', text: 'পরে কথা হবে', timestamp: threeHoursAgo, source: 'voice' }],
+    'voice',
+    26,
+    [],
+    true,
+    { latestUserText: 'আজ খুব রাগ হচ্ছে।' },
+  );
+  assert.ok(adminVoicePrompt.includes('FULL CONTEXTUAL EMOTIONAL RANGE'));
+  assert.ok(adminVoicePrompt.includes('mild jealousy in playful contexts'));
+  assert.ok(adminVoicePrompt.includes('playful stubbornness'));
+  assert.ok(adminVoicePrompt.includes('do NOT end every reply with another question'));
+  assert.ok(adminVoicePrompt.includes('WHEN ANGRY'));
+  assert.ok(adminVoicePrompt.includes('never claim you were waiting, worrying, or thinking while the app was inactive'));
+  assert.ok(adminVoicePrompt.includes('ADMIN VOICE CONVERSATION RULES'));
+  assert.ok(adminVoicePrompt.includes('Avoid long paragraphs in voice responses') || adminVoicePrompt.includes('avoid long paragraphs in voice responses'));
+
+  // Non-admin user MUST NEVER receive ANY of the Admin-only emotional blocks or Admin voice rules
+  const ordinaryVoicePrompt = buildTiyaSystemPrompt(
+    DEFAULT_SETTINGS,
+    [{ id: 'm2', role: 'user', text: 'হ্যালো', timestamp: threeHoursAgo, source: 'voice' }],
+    'voice',
+    26,
+    [],
+    false,
+    { latestUserText: 'আজ খুব রাগ হচ্ছে।' },
+  );
+  assert.ok(!ordinaryVoicePrompt.includes('FULL CONTEXTUAL EMOTIONAL RANGE'));
+  assert.ok(!ordinaryVoicePrompt.includes('ADMIN VOICE CONVERSATION RULES'));
+  assert.ok(!ordinaryVoicePrompt.includes('AUTHENTICATED ADMIN PERSONALITY'));
+  assert.ok(!ordinaryVoicePrompt.includes('NATURAL AFFECTIONATE BENGALI EXPRESSIONS'));
+});

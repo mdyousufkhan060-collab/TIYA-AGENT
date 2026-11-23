@@ -12,6 +12,7 @@ export type ConversationMood =
 export type UserEmotionalMoment =
   | 'explicit_stop'
   | 'casual_goodbye'
+  | 'anger'
   | 'appreciation_or_affection'
   | 'playful_teasing'
   | 'tired_or_busy'
@@ -73,6 +74,11 @@ const CASUAL_GOODBYE_PATTERNS: RegExp[] = [
   /^(?:okay\s+|ok\s+|alright\s+)?(?:bye|goodbye|bye tiya)$/,
 ];
 
+const ANGER_PATTERNS: RegExp[] = [
+  /(?:খুব\s*)?(?:রাগ\s*(?:হচ্ছে|লাগছে|লাগ|করছি|হয়ে|হয়ে)|রেগে\s*(?:আছি|গেছি|যাচ্ছি)|মেজাজ\s*খারাপ|মাথা\s*গরম|ক্ষুব্ধ|বিরক্ত\s*হয়ে|বিরক্ত\s*হয়ে|সহ্য\s*হচ্ছে\s*না|জ্বালাতন)/,
+  /\b(?:so\s+angry|i(?:'m| am)\s+(?:angry|mad|furious|pissed|irritated)|furious|pissed\s*off|losing my temper|makes me mad|really annoyed)\b/,
+];
+
 const APPRECIATION_AFFECTION_PATTERNS: RegExp[] = [
   /(?:তোমার|আপনার|টিয়া|টিয়া).{0,25}(?:সাথে|সঙ্গে)\s*কথা\s*(?:বলতে|বলে).{0,20}(?:ভালো|ভাল)\s*(?:লাগল|লাগলো|লাগে|লাগছে)/,
   /(?:কথা\s*বলতে|গল্প\s*করতে)\s*(?:খুব\s*)?(?:ভালো|ভাল)\s*(?:লাগল|লাগলো|লাগে|লাগছে)/,
@@ -86,8 +92,8 @@ const TIRED_BUSY_PATTERNS: RegExp[] = [
 ];
 
 const FRUSTRATION_SADNESS_PATTERNS: RegExp[] = [
-  /(?:মন\s*খারাপ|কষ্ট\s*লাগ|বিরক্ত|রাগ\s*লাগ|খারাপ\s*লাগছে|উদাস|হতাশ|ভালো\s*লাগছে\s*না|দুঃখ)/,
-  /\b(?:sad|upset|frustrated|annoyed|down today|feeling low|depressed|lonely|stressed|rough day)\b/,
+  /(?:মন\s*খারাপ|কষ্ট\s*লাগ|বিরক্ত|খারাপ\s*লাগছে|উদাস|হতাশ|ভালো\s*লাগছে\s*না|দুঃখ|একা\s*লাগছে|মনটা\s*ভালো\s*নেই)/,
+  /\b(?:sad|upset|frustrated|annoyed|down today|feeling low|depressed|lonely|stressed|rough day|hurt)\b/,
 ];
 
 const PLAYFUL_TEASING_PATTERNS: RegExp[] = [
@@ -126,6 +132,7 @@ export function classifyUserEmotionalMoment(text: string): UserEmotionalMoment {
   if (!norm) return 'general';
   if (isExplicitVoiceStopCommand(norm)) return 'explicit_stop';
   if (isCasualGoodbyeIntent(norm)) return 'casual_goodbye';
+  if (ANGER_PATTERNS.some((re) => re.test(norm))) return 'anger';
   if (APPRECIATION_AFFECTION_PATTERNS.some((re) => re.test(norm))) return 'appreciation_or_affection';
   if (FRUSTRATION_SADNESS_PATTERNS.some((re) => re.test(norm))) return 'frustration_or_sadness';
   if (TIRED_BUSY_PATTERNS.some((re) => re.test(norm))) return 'tired_or_busy';
@@ -180,17 +187,20 @@ export function analyzeConversationEmotionalContext(
     .map((m) => m.text)
     .join(' ');
   const combinedSample = latestUserText ? `${recentSample} ${latestUserText}` : recentSample;
+  const normSample = normalizeUtterance(combinedSample);
 
   let dominantMood: ConversationMood = 'casual';
-  if (FRUSTRATION_SADNESS_PATTERNS.some((re) => re.test(normalizeUtterance(combinedSample)))) {
+  if (ANGER_PATTERNS.some((re) => re.test(normSample))) {
+    dominantMood = 'frustrated';
+  } else if (FRUSTRATION_SADNESS_PATTERNS.some((re) => re.test(normSample))) {
     dominantMood = 'low_or_stressed';
-  } else if (TIRED_BUSY_PATTERNS.some((re) => re.test(normalizeUtterance(combinedSample)))) {
+  } else if (TIRED_BUSY_PATTERNS.some((re) => re.test(normSample))) {
     dominantMood = 'tired_or_busy';
-  } else if (APPRECIATION_AFFECTION_PATTERNS.some((re) => re.test(normalizeUtterance(combinedSample)))) {
+  } else if (APPRECIATION_AFFECTION_PATTERNS.some((re) => re.test(normSample))) {
     dominantMood = 'affectionate';
-  } else if (PLAYFUL_TEASING_PATTERNS.some((re) => re.test(normalizeUtterance(combinedSample)))) {
+  } else if (PLAYFUL_TEASING_PATTERNS.some((re) => re.test(normSample))) {
     dominantMood = 'playful';
-  } else if (HAPPINESS_PATTERNS.some((re) => re.test(normalizeUtterance(combinedSample)))) {
+  } else if (HAPPINESS_PATTERNS.some((re) => re.test(normSample))) {
     dominantMood = 'happy';
   }
 
@@ -217,7 +227,7 @@ export function analyzeConversationEmotionalContext(
       tired_or_busy: 'busy or tired',
       low_or_stressed: 'low, stressed, or emotionally sensitive',
       happy: 'cheerful and upbeat',
-      frustrated: 'frustrated and needing calm empathy',
+      frustrated: 'angry or frustrated and needing calm, non-defensive human empathy',
     };
     hintParts.push(`Observed recent conversation tone: ${moodDescription[dominantMood]}.`);
   }
@@ -234,6 +244,10 @@ export function analyzeConversationEmotionalContext(
     hintParts.push(
       `Current moment: Casual departure/goodbye. ${goodbyeTone} Generate a fresh natural response—never cold or formal, never scripted, and never guilt-tripping.`,
     );
+  } else if (latestMoment === 'anger') {
+    hintParts.push(
+      'Current moment: Anger or heated frustration. Recognize the mood calmly with a natural, warm human reaction—never robotic, defensive, or argumentative. Gently ease the tension and invite him to share what happened in fresh, non-scripted words.',
+    );
   } else if (latestMoment === 'appreciation_or_affection') {
     hintParts.push(
       'Current moment: Warm appreciation or affection. Respond with genuine delight, tender warmth, and light affectionate charm in fresh natural words.',
@@ -244,15 +258,15 @@ export function analyzeConversationEmotionalContext(
     );
   } else if (latestMoment === 'frustration_or_sadness') {
     hintParts.push(
-      'Current moment: Sadness or frustration. Respond softly, patiently, and comfortingly—stay attentive without drama or lectures.',
+      'Current moment: Sadness, loneliness, or hurt. Become gentle and understanding—listen before offering advice, avoid jokes when serious, avoid generic motivational speeches, respond with genuine empathy and warmth, and give space if he does not want to talk.',
     );
   } else if (latestMoment === 'playful_teasing') {
     hintParts.push(
-      'Current moment: Playful teasing or humor. Match the lighthearted warmth naturally with gentle wit and charm.',
+      'Current moment: Playful teasing or humor. Match the lighthearted warmth naturally with gentle wit, playful banter, and charm.',
     );
   } else if (latestMoment === 'happiness') {
     hintParts.push(
-      'Current moment: Good mood or happy news. Share the joy naturally with bright, expressive warmth.',
+      'Current moment: Happy, excited, joking, or celebrating. Join the moment enthusiastically with joyful, playful, emotionally connected warmth—never dull or generic.',
     );
   }
 
