@@ -19,6 +19,7 @@ import {
   getConfirmationPromptText,
   validatePhoneAction,
 } from './src/utils/phoneActions';
+import { sanitizeAdminReply } from './src/utils/prompts';
 import { validateNavigateToolArgs } from './src/utils/tiyaNavigation';
 import { resolveCanonicalFemaleVoice } from './src/utils/voiceAudioPipeline';
 import {
@@ -465,13 +466,15 @@ async function startServer() {
       return;
     }
 
-    const { message, history, systemInstruction, model, defaultTimezone } = req.body as {
+    const { message, history, systemInstruction, model, defaultTimezone, isOwner } = req.body as {
       message?: string;
       history?: Array<{ role: 'user' | 'assistant'; text: string }>;
       systemInstruction?: string;
       model?: string;
       defaultTimezone?: string;
+      isOwner?: boolean;
     };
+    const isOwnerReq = Boolean(isOwner);
 
     if (!message || !message.trim()) {
       res.status(400).json({ ok: false, label: 'Invalid request', detail: 'Message cannot be empty.' });
@@ -503,11 +506,16 @@ async function startServer() {
           ? ''
           : `\n\n[Live Search Decision Engine — Do NOT mention these brackets]: Category=${decision.category}. Recommended tools=${decision.recommendedTools.join(', ') || 'none'}.${
               decision.detectedCountry ? ` Focus region=${decision.detectedCountry}.` : ''
-            } Recency=${decision.recency}. Always call the appropriate real-time tool or Google Search Grounding before answering—never guess live facts.`;
+            } Recency=${decision.recency}. Always call the appropriate real-time tool or Google Search Grounding before answering—never guess live facts.${
+              isOwnerReq
+                ? ' Deliver the live answer in your warm, natural companion voice for স্যার (never robotic or helpdesk tone).'
+                : ''
+            }`;
 
       const effectiveSystem = `${
         systemInstruction || 'You are TIYA, a helpful Bengali-default AI assistant.'
       }${decisionHint}`;
+      const ownerTemp = isOwnerReq && decision.category === 'general_conversation' ? 0.9 : undefined;
 
       const contents: Array<Record<string, unknown>> = [
         ...formattedHistory,
@@ -534,6 +542,7 @@ async function startServer() {
             contents: contents as any,
             config: {
               systemInstruction: effectiveSystem,
+              ...(ownerTemp !== undefined ? { temperature: ownerTemp } : {}),
               tools: tools as any,
               ...(toolConfig ? { toolConfig: toolConfig as any } : {}),
             },
@@ -547,6 +556,7 @@ async function startServer() {
               contents: contents as any,
               config: {
                 systemInstruction: effectiveSystem,
+                ...(ownerTemp !== undefined ? { temperature: ownerTemp } : {}),
                 tools: [{ functionDeclarations: allFunctionDecls }] as any,
               },
             });
@@ -627,9 +637,13 @@ async function startServer() {
 
       const grounding = mergeGroundingMetadata(collectedGrounding);
 
+      const finalReplyText = isOwnerReq
+        ? sanitizeAdminReply(replyText, message)
+        : replyText || 'বলুন, কীভাবে সাহায্য করতে পারি?';
+
       res.json({
         ok: true,
-        text: replyText || 'বলুন, কীভাবে সাহায্য করতে পারি?',
+        text: finalReplyText,
         action: detectedAction,
         navigate: navigateCommand,
         needsMotivation,

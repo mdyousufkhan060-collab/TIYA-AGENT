@@ -7,6 +7,9 @@ import {
   enforceAdminAddressingText,
   isTiyaOwnerEmail,
   resolveEffectivePersona,
+  sanitizeAdminHistoryForPrompt,
+  sanitizeAdminReply,
+  stripAdminRoboticClichés,
 } from './prompts';
 
 test('under-18 users lock GF Mode, Companion, and AFFECTION cleanly', () => {
@@ -193,3 +196,59 @@ test('enforceAdminAddressingText eliminates prohibited personal names and তু
   const happyStyle = detectEmotionalVoiceStyle('স্যার, দারুণ খবর শুনে খুব খুশি হলাম!', true);
   assert.ok(happyStyle.includes('cheerful'));
 });
+
+test('stripAdminRoboticClichés, sanitizeAdminReply, and sanitizeAdminHistoryForPrompt eliminate robotic assistant boilerplate for Admin only', () => {
+  // Trailing Bengali robotic helpdesk suffix stripped while preserving warm human reply
+  assert.equal(
+    stripAdminRoboticClichés('আমি ভালো আছি স্যার! আজ আপনাকে কীভাবে সাহায্য করতে পারি?'),
+    'আমি ভালো আছি স্যার!',
+  );
+  // Trailing English robotic helpdesk suffix stripped
+  assert.equal(
+    stripAdminRoboticClichés('Good to hear from you, Sir. How can I help you today?'),
+    'Good to hear from you, Sir.',
+  );
+  // Leading "As an AI assistant" / Bengali equivalent stripped
+  assert.equal(
+    stripAdminRoboticClichés('As an AI assistant, I think that sounds fun!'),
+    'I think that sounds fun!',
+  );
+  assert.equal(
+    stripAdminRoboticClichés('একজন এআই অ্যাসিস্ট্যান্ট হিসেবে, আমি আপনার কথা শুনছি।'),
+    'আমি আপনার কথা শুনছি।',
+  );
+  // Natural human Bengali reply stays completely intact
+  const natural = 'এখন বেশ ভালো লাগছে স্যার, আপনার সঙ্গে কথা হচ্ছে তো… আজ দিনটা কেমন গেল?';
+  assert.equal(stripAdminRoboticClichés(natural), natural);
+
+  // Pure robotic standalone reply gets replaced with a warm, context-matched natural Bengali reply
+  const pureRoboticEn = sanitizeAdminReply('Hello! How can I help you today?', 'কেমন আছো?');
+  assert.ok(!/how can i help|assist you/i.test(pureRoboticEn));
+  assert.ok(pureRoboticEn.includes('স্যার'));
+
+  const pureRoboticBn = sanitizeAdminReply('বলুন, আজ আপনাকে কীভাবে সাহায্য করতে পারি?', 'আজ খুব রাগ হচ্ছে');
+  assert.ok(!/সাহায্য/.test(pureRoboticBn));
+  assert.ok(pureRoboticBn.includes('স্যার'));
+  assert.ok(pureRoboticBn.includes('কী হয়েছে'));
+
+  // Combined addressing + anti-robotic cleaning
+  const combined = sanitizeAdminReply('তুমি কেমন আছো ইউসুফ? বলুন, কীভাবে সাহায্য করতে পারি?');
+  assert.ok(!combined.includes('ইউসুফ'));
+  assert.ok(!combined.includes('তুমি'));
+  assert.ok(!combined.includes('সাহায্য করতে পারি'));
+  assert.ok(combined.includes('স্যার'));
+  assert.ok(combined.includes('আপনি'));
+
+  // History sanitizer cleans stale robotic assistant turns without altering user messages
+  const cleanedHistory = sanitizeAdminHistoryForPrompt([
+    { role: 'user', text: 'হাই, কেমন আছো?' },
+    { role: 'assistant', text: 'বলুন, কীভাবে সাহায্য করতে পারি?' },
+    { role: 'user', text: 'তুমি কী করছ?' },
+    { role: 'assistant', text: 'ভালো আছি স্যার! আজ আপনাকে কীভাবে সাহায্য করতে পারি?' },
+  ]);
+  assert.equal(cleanedHistory.length, 3);
+  assert.equal(cleanedHistory[0].text, 'হাই, কেমন আছো?');
+  assert.equal(cleanedHistory[1].text, 'তুমি কী করছ?');
+  assert.equal(cleanedHistory[2].text, 'ভালো আছি স্যার!');
+});
+

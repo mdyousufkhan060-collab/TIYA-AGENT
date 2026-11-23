@@ -13,6 +13,8 @@ export type UserEmotionalMoment =
   | 'explicit_stop'
   | 'casual_goodbye'
   | 'anger'
+  | 'absence_return'
+  | 'personal_checkin'
   | 'appreciation_or_affection'
   | 'playful_teasing'
   | 'tired_or_busy'
@@ -75,8 +77,19 @@ const CASUAL_GOODBYE_PATTERNS: RegExp[] = [
 ];
 
 const ANGER_PATTERNS: RegExp[] = [
-  /(?:খুব\s*)?(?:রাগ\s*(?:হচ্ছে|লাগছে|লাগ|করছি|হয়ে|হয়ে)|রেগে\s*(?:আছি|গেছি|যাচ্ছি)|মেজাজ\s*খারাপ|মাথা\s*গরম|ক্ষুব্ধ|বিরক্ত\s*হয়ে|বিরক্ত\s*হয়ে|সহ্য\s*হচ্ছে\s*না|জ্বালাতন)/,
-  /\b(?:so\s+angry|i(?:'m| am)\s+(?:angry|mad|furious|pissed|irritated)|furious|pissed\s*off|losing my temper|makes me mad|really annoyed)\b/,
+  /(?:খুব\s*)?(?:রাগ\s*(?:হচ্ছে|লাগছে|লাগ|করছি|করেছি|করলাম|করে|হয়ে|হয়ে|উঠছে|উঠেছে)|রেগে\s*(?:আছি|গেছি|যাচ্ছি|গিয়েছি|গিয়েছি)|মেজাজ\s*খারাপ|মাথা\s*গরম|ক্ষুব্ধ|বিরক্ত\s*হয়ে|বিরক্ত\s*হয়ে|সহ্য\s*হচ্ছে\s*না|জ্বালাতন)/,
+  /(?:তোমার|আপনার)\s*(?:ওপর|উপর|প্রতি)\s*রাগ/,
+  /\b(?:so\s+angry|i(?:'m| am)\s+(?:angry|mad|furious|pissed|irritated)|angry\s+(?:at|with)\s+you|mad\s+at\s+you|furious|pissed\s*off|losing my temper|makes me mad|really annoyed)\b/,
+];
+
+const ABSENCE_RETURN_PATTERNS: RegExp[] = [
+  /(?:অনেকদিন|অনেক\s*দিন|অনেকক্ষণ|অনেক\s*ক্ষণ|বহুদিন|কতদিন|কত\s*দিন).{0,35}(?:কথা\s*(?:বলিনি|হয়নি|হয়নি)|মেসেজ\s*দিইনি|আসিনি|খবর\s*নিইনি|দেখা\s*হয়নি|দেখা\s*হয়নি)/,
+  /\b(?:long time no|haven(?:'t| not)\s+(?:talked|messaged|texted|spoken)|didn(?:'t| not)\s+message\s+you\s+for\s+a\s+long\s+time|been\s+away\s+for\s+a\s+while)\b/,
+];
+
+const PERSONAL_CHECKIN_PATTERNS: RegExp[] = [
+  /^(?:হাই|হ্যালো|এই\s*যে|শোনো|শুনুন|টিয়া|টিয়া|রোজ)?\s*(?:তুমি\s*|আপনি\s*)?(?:কেমন\s*(?:আছ|আছো|আছেন)|কী\s*(?:করছ|করছো|করছেন)|কি\s*(?:করছ|করছো|করছেন)|কী\s*খবর|কি\s*খবর)$/,
+  /\b(?:how are you|what are you doing|what(?:'s| is) up|whatcha doing)\b/,
 ];
 
 const APPRECIATION_AFFECTION_PATTERNS: RegExp[] = [
@@ -133,11 +146,13 @@ export function classifyUserEmotionalMoment(text: string): UserEmotionalMoment {
   if (isExplicitVoiceStopCommand(norm)) return 'explicit_stop';
   if (isCasualGoodbyeIntent(norm)) return 'casual_goodbye';
   if (ANGER_PATTERNS.some((re) => re.test(norm))) return 'anger';
+  if (ABSENCE_RETURN_PATTERNS.some((re) => re.test(norm))) return 'absence_return';
   if (APPRECIATION_AFFECTION_PATTERNS.some((re) => re.test(norm))) return 'appreciation_or_affection';
   if (FRUSTRATION_SADNESS_PATTERNS.some((re) => re.test(norm))) return 'frustration_or_sadness';
   if (TIRED_BUSY_PATTERNS.some((re) => re.test(norm))) return 'tired_or_busy';
   if (PLAYFUL_TEASING_PATTERNS.some((re) => re.test(norm))) return 'playful_teasing';
   if (HAPPINESS_PATTERNS.some((re) => re.test(norm))) return 'happiness';
+  if (PERSONAL_CHECKIN_PATTERNS.some((re) => re.test(norm))) return 'personal_checkin';
   return 'general';
 }
 
@@ -246,7 +261,15 @@ export function analyzeConversationEmotionalContext(
     );
   } else if (latestMoment === 'anger') {
     hintParts.push(
-      'Current moment: Anger or heated frustration. Recognize the mood calmly with a natural, warm human reaction—never robotic, defensive, or argumentative. Gently ease the tension and invite him to share what happened in fresh, non-scripted words.',
+      'Current moment: Anger or upset directed at you or a situation. Recognize his tone calmly with a natural, warm, emotionally intelligent human reaction—never robotic, defensive, or argumentative, and NEVER formal AI language. If you made a mistake, acknowledge it naturally rather than giving a robotic apology. Gently ease the tension and invite him to tell you what happened.',
+    );
+  } else if (latestMoment === 'absence_return') {
+    hintParts.push(
+      'Current moment: Returning after a gap or mentioning not messaging/talking for a while. React warmly with light affectionate surprise or gentle playful understanding that he must have been busy—NEVER guilt-trip, NEVER pressure him, and NEVER pretend you were actively waiting, worrying, or experiencing time while the app was inactive.',
+    );
+  } else if (latestMoment === 'personal_checkin') {
+    hintParts.push(
+      'Current moment: Personal casual check-in ("কেমন আছো?" / "তুমি কী করছ?"). Respond like a warm, lively, affectionate human companion happy to talk with him—NEVER reply with generic assistant lines like "আমি ভালো আছি। আজ আপনাকে কীভাবে সাহায্য করতে পারি?" or "How can I help you today?".',
     );
   } else if (latestMoment === 'appreciation_or_affection') {
     hintParts.push(
@@ -258,7 +281,7 @@ export function analyzeConversationEmotionalContext(
     );
   } else if (latestMoment === 'frustration_or_sadness') {
     hintParts.push(
-      'Current moment: Sadness, loneliness, or hurt. Become gentle and understanding—listen before offering advice, avoid jokes when serious, avoid generic motivational speeches, respond with genuine empathy and warmth, and give space if he does not want to talk.',
+      'Current moment: Sadness, loneliness, or emotional hurt. Stop playful teasing and unnecessary questions; avoid jokes when serious, avoid generic motivational speeches, and listen before offering advice. Become soft, gentle, and deeply attentive—give space, respond with warm empathy, and do not immediately push solutions unless requested.',
     );
   } else if (latestMoment === 'playful_teasing') {
     hintParts.push(
@@ -266,7 +289,7 @@ export function analyzeConversationEmotionalContext(
     );
   } else if (latestMoment === 'happiness') {
     hintParts.push(
-      'Current moment: Happy, excited, joking, or celebrating. Join the moment enthusiastically with joyful, playful, emotionally connected warmth—never dull or generic.',
+      'Current moment: Happy, excited, joking, or celebrating. Match his energy wholeheartedly—be joyful, playful, emotionally connected, and genuinely excited in natural conversation, never dull or generic.',
     );
   }
 

@@ -33,7 +33,12 @@ import {
   UserEmotionalMoment,
 } from '../utils/emotionalConversation';
 import { getConfirmationPromptText, validatePhoneAction } from '../utils/phoneActions';
-import { detectEmotionalVoiceStyle, enforceAdminAddressingText } from '../utils/prompts';
+import {
+  buildAdminTurnReminder,
+  detectEmotionalVoiceStyle,
+  sanitizeAdminHistoryForPrompt,
+  sanitizeAdminReply,
+} from '../utils/prompts';
 import { validateNavigateToolArgs } from '../utils/tiyaNavigation';
 import {
   computeNaturalPlaybackRate,
@@ -281,6 +286,7 @@ async function handle(path: string, key: string, body: any): Promise<ApiResult> 
         .slice(-16)
         .map((h: any) => ({ role: h.role === 'assistant' ? 'assistant' : 'user', text: String(h.text || '') }))
         .filter((h: any) => h.text.trim());
+      const isOwnerReq = Boolean(body?.isOwner);
       const baseSystem = String(body?.systemInstruction || 'You are TIYA, a helpful Bengali-default AI assistant.');
       const decision = decideSearchStrategy(message);
       const decisionHint =
@@ -288,8 +294,16 @@ async function handle(path: string, key: string, body: any): Promise<ApiResult> 
           ? ''
           : `\n\n[Live Search Decision Engine — Do NOT mention these brackets]: Category=${decision.category}. Recommended tools=${decision.recommendedTools.join(', ') || 'none'}.${
               decision.detectedCountry ? ` Focus region=${decision.detectedCountry}.` : ''
-            } Recency=${decision.recency}. Always call the appropriate live tool or Google Search Grounding before answering—never guess live facts.`;
+            } Recency=${decision.recency}. Always call the appropriate live tool or Google Search Grounding before answering—never guess live facts.${
+              isOwnerReq
+                ? ' Deliver the live answer in your warm, natural companion voice for স্যার (never robotic or helpdesk tone).'
+                : ''
+            }`;
       const system = `${baseSystem}${decisionHint}`;
+      const ownerGenConfig =
+        isOwnerReq && decision.category === 'general_conversation'
+          ? { generationConfig: { temperature: 0.9 } }
+          : {};
       let lastErr: unknown = null;
 
       if (key) {
@@ -337,6 +351,7 @@ async function handle(path: string, key: string, body: any): Promise<ApiResult> 
                   contents,
                   systemInstruction: { parts: [{ text: system }] },
                   tools: [{ functionDeclarations: allFunctionDecls }],
+                  ...ownerGenConfig,
                 });
               }
 
@@ -385,10 +400,13 @@ async function handle(path: string, key: string, body: any): Promise<ApiResult> 
 
             if (action && !text) text = getConfirmationPromptText(action);
             else if (navigate && !text) text = (navigate as any).confirmBn || '';
+            const finalText = isOwnerReq
+              ? sanitizeAdminReply(text, message)
+              : text || 'বলুন, কীভাবে সাহায্য করতে পারি?';
             const grounding = mergeGroundingMetadata(collectedGrounding);
             return ok({
               ok: true,
-              text: text || 'বলুন, কীভাবে সাহায্য করতে পারি?',
+              text: finalText,
               action,
               navigate,
               needsMotivation,
@@ -407,7 +425,8 @@ async function handle(path: string, key: string, body: any): Promise<ApiResult> 
       const groqKey = getGroqKey();
       if (groqKey) {
         try {
-          const text = await groqChat(groqKey, system, history, message);
+          const rawGroqText = await groqChat(groqKey, system, history, message);
+          const text = isOwnerReq ? sanitizeAdminReply(rawGroqText, message) : rawGroqText;
           return ok({ ok: true, text, action: null, navigate: null, needsMotivation: false, grounding: null, model: 'groq' });
         } catch (err) {
           lastErr = lastErr || err;
@@ -816,7 +835,7 @@ export class LocalLiveSocket {
           model: `models/${this.lockedLiveModel}`,
           generationConfig: {
             responseModalities: ['AUDIO'],
-            temperature: 0.7,
+            temperature: this.isOwner ? 0.88 : 0.7,
             speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceName: this.voiceName } } },
           },
           systemInstruction: { parts: [{ text: this.systemInstruction }] },
@@ -974,7 +993,7 @@ export class LocalLiveSocket {
             model: `models/${modelId}`,
             generationConfig: {
               responseModalities: ['AUDIO'],
-              temperature: 0.7,
+              temperature: this.isOwner ? 0.88 : 0.7,
               speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceName: this.voiceName } } },
             },
             systemInstruction: { parts: [{ text: systemInstruction }] },
@@ -1104,12 +1123,18 @@ export class LocalLiveSocket {
         if (emoCtx.promptHint) {
           turnSystemInstruction += `\n\nLive Turn Emotional Context: ${emoCtx.promptHint}`;
         }
+        turnSystemInstruction += `\n\n${buildAdminTurnReminder(heard, turnHistoryMsgs)}`;
       }
+
+      const turnPromptHistory = this.isOwner
+        ? sanitizeAdminHistoryForPrompt(this.turnHistory.slice(-12))
+        : this.turnHistory.slice(-12);
 
       const res = await handle('/api/gemini/chat', this.apiKey, {
         message: heard,
-        history: this.turnHistory.slice(-12),
+        history: turnPromptHistory,
         systemInstruction: turnSystemInstruction,
+        isOwner: this.isOwner,
       });
       if (this.closedByClient) return;
       const data = res.json as any;
@@ -1121,7 +1146,7 @@ export class LocalLiveSocket {
       if (data.navigate) this.emit({ type: 'navigate', command: data.navigate });
       if (data.grounding) this.emit({ type: 'grounding', grounding: data.grounding });
       const rawReply = String(data.text || '').trim();
-      const reply = this.isOwner ? enforceAdminAddressingText(rawReply) : rawReply;
+      const reply = this.isOwner ? sanitizeAdminReply(rawReply, heard) : rawReply;
       this.turnHistory.push({ role: 'user', text: heard }, { role: 'assistant', text: reply });
       if (this.turnHistory.length > 24) this.turnHistory.splice(0, this.turnHistory.length - 24);
       if (reply) {
@@ -1417,14 +1442,25 @@ export class LocalLiveSocket {
       void (async () => {
         this.turnBusy = true;
         try {
+          const textMsg = String(msg.text);
+          const promptHistory = this.isOwner
+            ? sanitizeAdminHistoryForPrompt(this.turnHistory.slice(-12))
+            : this.turnHistory.slice(-12);
+          const sys = this.isOwner
+            ? `${this.systemInstruction}\n\n${buildAdminTurnReminder(textMsg)}`
+            : this.systemInstruction;
           const res = await handle('/api/gemini/chat', this.apiKey, {
-            message: String(msg.text),
-            history: this.turnHistory.slice(-12),
-            systemInstruction: this.systemInstruction,
+            message: textMsg,
+            history: promptHistory,
+            systemInstruction: sys,
+            isOwner: this.isOwner,
           });
           const data = res.json as any;
           if (data?.ok && data.text) {
-            await this.turnSpeak(String(data.text));
+            const spokenText = this.isOwner
+              ? sanitizeAdminReply(String(data.text), textMsg)
+              : String(data.text);
+            await this.turnSpeak(spokenText);
             this.emit({ type: 'turn_complete' });
           }
         } finally {
@@ -1436,14 +1472,24 @@ export class LocalLiveSocket {
       void (async () => {
         this.turnBusy = true;
         try {
+          const promptHistory = this.isOwner
+            ? sanitizeAdminHistoryForPrompt(this.turnHistory.slice(-12))
+            : this.turnHistory.slice(-12);
+          const sys = this.isOwner
+            ? `${this.systemInstruction}\n\n${buildAdminTurnReminder()}`
+            : this.systemInstruction;
           const res = await handle('/api/gemini/chat', this.apiKey, {
             message: String(msg.text),
-            history: this.turnHistory.slice(-12),
-            systemInstruction: this.systemInstruction,
+            history: promptHistory,
+            systemInstruction: sys,
+            isOwner: this.isOwner,
           });
           const data = res.json as any;
           if (data?.ok && data.text) {
-            await this.turnSpeak(String(data.text));
+            const spokenText = this.isOwner
+              ? sanitizeAdminReply(String(data.text))
+              : String(data.text);
+            await this.turnSpeak(spokenText);
             this.emit({ type: 'turn_complete' });
           }
         } finally {

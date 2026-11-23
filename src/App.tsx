@@ -42,7 +42,12 @@ import {
 } from './utils/authRedirect';
 import { isExplicitVoiceStopCommand } from './utils/emotionalConversation';
 import { extractExplicitMemories, mergeMemories } from './utils/memoryEngine';
-import { buildTiyaSystemPrompt, enforceAdminAddressingText } from './utils/prompts';
+import {
+  buildAdminTurnReminder,
+  buildTiyaSystemPrompt,
+  sanitizeAdminHistoryForPrompt,
+  sanitizeAdminReply,
+} from './utils/prompts';
 import {
   executePhoneAction,
   extractActionFromText,
@@ -612,7 +617,7 @@ export default function App() {
         const data = (await res.json()) as { ok?: boolean; text?: string };
         if (res.ok && data.ok && data.text?.trim()) {
           const cleanMot = data.text.trim();
-          return isVerifiedAdmin ? enforceAdminAddressingText(cleanMot) : cleanMot;
+          return isVerifiedAdmin ? sanitizeAdminReply(cleanMot) : cleanMot;
         }
       } catch {
         // Fallback to direct formatted Bengali response
@@ -753,6 +758,10 @@ export default function App() {
           return;
         }
 
+        const promptHistory = isVerifiedAdmin
+          ? sanitizeAdminHistoryForPrompt(historySnapshot)
+          : historySnapshot;
+
         const systemInstruction = buildTiyaSystemPrompt(
           settings,
           messages,
@@ -763,16 +772,18 @@ export default function App() {
           { latestUserText: text },
         );
         if (usePremiumServer) {
-          const premiumSystem =
-            systemInstruction +
+          const phoneActionNote =
             '\n\nPHONE ACTIONS: when the user asks to open an app, call someone, or send/call on WhatsApp or Messenger, ' +
             'reply with one short Bengali sentence and then put exactly one JSON object at the end, for example ' +
             '{"action":"open_app","app":"YouTube"} or {"action":"call","contact":"Ma"} or {"action":"whatsapp_call","contact":"My House"} or ' +
             '{"action":"whatsapp_message","contact":"Rahim","text":"..."} or {"action":"messenger_message","contact":"Rahim","text":"..."}. ' +
             'Never claim the action is already done.';
+          const premiumSystem = isVerifiedAdmin
+            ? `${systemInstruction}${phoneActionNote}\n\n${buildAdminTurnReminder(text, messages)}`
+            : `${systemInstruction}${phoneActionNote}`;
           const pr = await premiumChat([
             { role: 'system', content: premiumSystem },
-            ...historySnapshot.map((h) => ({ role: h.role, content: h.text })),
+            ...promptHistory.map((h) => ({ role: h.role, content: h.text })),
             { role: 'user', content: text },
           ]);
           if (!pr.ok) {
@@ -803,19 +814,20 @@ export default function App() {
             );
           }
           const { cleanText: pClean, action: pAction } = extractActionFromText(pr.text || '');
-          const pRaw =
-            pClean ||
-            (pAction
-              ? getConfirmationPromptText(pAction)
-              : isVerifiedAdmin
-                ? 'স্যার, বলুন না, আপনার কী কথা আছে?'
-                : 'বলুন, কীভাবে সাহায্য করতে পারি?');
+          const pText = isVerifiedAdmin
+            ? pClean
+              ? sanitizeAdminReply(pClean, text)
+              : pAction
+                ? getConfirmationPromptText(pAction)
+                : sanitizeAdminReply('', text)
+            : pClean ||
+              (pAction ? getConfirmationPromptText(pAction) : 'বলুন, কীভাবে সাহায্য করতে পারি?');
           updateMessages((prev) => [
             ...prev,
             {
               id: makeId(),
               role: 'assistant',
-              text: isVerifiedAdmin ? enforceAdminAddressingText(pRaw) : pRaw,
+              text: pText,
               timestamp: Date.now(),
               source: 'chat',
               ...(pAction ? { pendingAction: pAction, actionStatus: 'pending' as const } : {}),
@@ -832,9 +844,10 @@ export default function App() {
           },
           body: JSON.stringify({
             message: text,
-            history: historySnapshot,
+            history: promptHistory,
             systemInstruction,
             model: settings.chatModelOverride.trim() || undefined,
+            isOwner: isVerifiedAdmin,
           }),
         });
 
@@ -880,16 +893,20 @@ export default function App() {
 
         const { cleanText, action: inlineAction } = extractActionFromText(data.text || '');
         const pendingAction = data.action || inlineAction || undefined;
-        const rawReplyText =
-          cleanText ||
-          (pendingAction
-            ? getConfirmationPromptText(pendingAction)
-            : parsedNav
-              ? parsedNav.confirmBn
-              : isVerifiedAdmin
-                ? 'স্যার, বলুন না, আপনার কী কথা আছে?'
+        const replyText = isVerifiedAdmin
+          ? cleanText
+            ? sanitizeAdminReply(cleanText, text)
+            : pendingAction
+              ? getConfirmationPromptText(pendingAction)
+              : parsedNav
+                ? parsedNav.confirmBn
+                : sanitizeAdminReply('', text)
+          : cleanText ||
+            (pendingAction
+              ? getConfirmationPromptText(pendingAction)
+              : parsedNav
+                ? parsedNav.confirmBn
                 : 'বলুন, কীভাবে সাহায্য করতে পারি?');
-        const replyText = isVerifiedAdmin ? enforceAdminAddressingText(rawReplyText) : rawReplyText;
 
         const assistantMsg: ChatMessage = {
           id: makeId(),
